@@ -1,0 +1,45 @@
+{
+    "name": "jrozowdark/ulatina",
+    "description": "Drupal 11 - ULatina (Dokploy)",
+    "type": "project",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "composer/installers": "^2.0",
+        "drupal/core-composer-scaffold": "^11",
+        "drupal/core-project-message": "^11",
+        "drupal/core-recommended": "^11",
+        "drush/drush": "^13"
+    },
+    "conflict": {
+        "drupal/drupal": "*"
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "config": {
+        "allow-plugins": {
+            "composer/installers": true,
+            "drupal/core-composer-scaffold": true,
+            "drupal/core-project-message": true,
+            "php-http/discovery": true,
+            "symfony/runtime": true,
+            "tbachert/spi": true
+        },
+        "sort-packages": true
+    },
+    "extra": {
+        "drupal-scaffold": {
+            "locations": {
+                "web-root": "web/"
+            }
+        },
+        "installer-paths": {
+            "web/core": ["type:drupal-core"],
+            "web/libraries/{$name}": ["type:drupal-library"],
+            "web/modules/contrib/{$name}": ["type:drupal-module"],
+            "web/profiles/contrib/{$name}": ["type:drupal-profile"],
+            "web/themes/contrib/{$name}": ["type:drupal-theme"],
+            "web/modules/custom/{$name}": ["type:drupal-custom-module"],
+            "web/themes/custom/{$name}": ["type:drupal-custom-theme"]
+        }
+    }
+}

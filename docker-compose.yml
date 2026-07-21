@@ -1,0 +1,47 @@
+services:
+  drupal:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DRUPAL_HASH_SALT: ${DRUPAL_HASH_SALT}
+    volumes:
+      - drupal_files:/var/www/html/web/sites/default/files
+      - ./web/modules/custom:/var/www/html/web/modules/custom
+      - ./web/themes/custom:/var/www/html/web/themes/custom
+      - ./config/sync:/var/www/html/config/sync
+    ports:
+      - "8080:80"   # Solo LOCAL. En Dokploy lo enruta Traefik (Fase 3).
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${DB_USER}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  drupal_files:
+  db_data:

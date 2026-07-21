@@ -1,0 +1,27 @@
+# Drupal core y contrib (los baja Composer en el build)
+/web/core/
+/web/modules/contrib/
+/web/themes/contrib/
+/web/profiles/contrib/
+/web/libraries/
+/vendor/
+
+# Archivos generados / subidos
+/web/sites/*/files/
+/web/sites/*/private/
+
+# Entorno
+.env
+
+# Scaffold de Drupal (se regenera)
+/web/robots.txt
+/web/.htaccess
+/web/index.php
+/web/update.php
+/web/web.config
+/web/autoload.php
+/web/sites/default/default.settings.php
+/web/sites/default/default.services.yml
+
+# OS / editor
+.DS_Store
