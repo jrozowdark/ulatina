@@ -163,7 +163,140 @@ git checkout qa && git merge develop && git push origin qa
 
 ---
 
-## FASE 3 — Dokploy: environments + Compose + GitHub App (pendiente)
-<!-- proyecto Ulatina, environments development/qa, dominios *.traefik.me -->
+## FASE 3 — Dokploy: GitHub App + environments + Compose
 
-## FASE 4 — Auto-deploy + dominios/SSL (pendiente)
+### Arquitectura
+```
+Dokploy (82.25.84.215:3000) · Proyecto "Ulatina"
+  ├── Environment "development" → Compose "drupal-dev" → rama develop
+  └── Environment "qa"          → Compose "drupal-qa"  → rama qa
+```
+Cada ambiente tiene su propia BD y sus propios volúmenes: son independientes.
+
+### Por qué un compose separado para Dokploy
+| Archivo | Uso | Puertos |
+|---|---|---|
+| `docker-compose.yml` | Local (OrbStack) | Bindea `8080:80` |
+| `docker-compose.dokploy.yml` | Servidor Dokploy | Sin bind; enruta Traefik |
+
+En Dokploy NO se bindean puertos: los reserva Traefik. Además, si dev y QA
+bindearan el mismo puerto, el segundo despliegue fallaría.
+La BD queda en una red `interna` privada por stack, así el Drupal de DEV
+no puede alcanzar la base de datos de QA.
+
+### 1. Subir el compose de Dokploy a las tres ramas
+```bash
+cd ~/Projects/ulatina
+git checkout main
+git add docker-compose.dokploy.yml comandos-ulatina.md Dockerfile
+git commit -m "Fase 3: compose para Dokploy + mariadb-client"
+git push origin main
+```
+> Sube el archivo a la rama estable primero.
+
+```bash
+git checkout develop && git merge main && git push origin develop
+git checkout qa && git merge main && git push origin qa
+git checkout develop
+```
+> Propaga el mismo commit a los dos ambientes y te deja parado en `develop`.
+
+### 2. Generar los secretos de cada ambiente
+```bash
+echo "DEV  HASH_SALT: $(openssl rand -hex 32)"
+echo "DEV  DB_PASS:   $(openssl rand -hex 16)"
+echo "DEV  DB_ROOT:   $(openssl rand -hex 16)"
+echo "QA   HASH_SALT: $(openssl rand -hex 32)"
+echo "QA   DB_PASS:   $(openssl rand -hex 16)"
+echo "QA   DB_ROOT:   $(openssl rand -hex 16)"
+```
+> `openssl rand -hex` genera solo caracteres 0-9a-f: sin símbolos `$` que rompan
+> la interpolación de Docker Compose. Guárdalos: se pegan en Dokploy.
+
+### 3. Conectar GitHub a Dokploy (una sola vez)
+En Dokploy: **Settings → Git → GitHub → Create GitHub App**
+1. Nombra la app (ej. `dokploy-webdigitalark`) y autoriza en GitHub.
+2. En GitHub, al instalar la app elige **Only select repositories** → `jrozowdark/ulatina`.
+3. Vuelve a Dokploy y confirma que el repo aparece en la lista.
+
+> Se usa GitHub App y no llave SSH porque la App instala el webhook
+> automáticamente: eso es lo que habilita el auto-deploy de la Fase 4.
+
+### 4. Crear el ambiente DEV
+En el proyecto **Ulatina** → pestaña de environments → **Create Environment** → `development`.
+Dentro de ese environment: **Create Service → Compose**.
+
+| Campo | Valor |
+|---|---|
+| Name | `drupal-dev` |
+| Provider | GitHub |
+| Repository | `jrozowdark/ulatina` |
+| Branch | `develop` |
+| Compose Path | `./docker-compose.dokploy.yml` |
+| Compose Type | **Docker Compose** (NO Stack) |
+
+> Debe ser "Docker Compose": en modo Stack (Swarm) la directiva `build` no funciona.
+
+### 5. Variables de entorno de DEV
+En el servicio `drupal-dev` → pestaña **Environment**, pega:
+```
+DB_HOST=mariadb
+DB_PORT=3306
+DB_NAME=ulatina_dev
+DB_USER=ulatina_dev
+DB_PASSWORD=<DEV DB_PASS del paso 2>
+DB_ROOT_PASSWORD=<DEV DB_ROOT del paso 2>
+DRUPAL_HASH_SALT=<DEV HASH_SALT del paso 2>
+```
+
+### 6. Desplegar DEV
+Botón **Deploy**. El primer build tarda varios minutos (baja Drupal core).
+Sigue el avance en la pestaña **Logs** o **Deployments**.
+
+### 7. Asignar el dominio temporal
+Servicio `drupal-dev` → pestaña **Domains** → **Add Domain**:
+
+| Campo | Valor |
+|---|---|
+| Service Name | `drupal` |
+| Container Port | `80` |
+| Host | usar el botón de dominio generado (`*.traefik.me`) |
+| HTTPS | activado |
+
+> IMPORTANTE: si el healthcheck del contenedor no pasa, Traefik omite crear la ruta
+> y el dominio dará 404. Verifica primero que el servicio esté `healthy`.
+
+### 8. Instalar Drupal en DEV
+En el servicio → pestaña **Terminal** (o **Advanced → Terminal**), sobre el contenedor `drupal`:
+```bash
+vendor/bin/drush site:install standard \
+  --account-name=jrosas --account-pass=CambiaEstaClave \
+  --site-name="ULatina DEV" -y
+```
+> Instala Drupal usando las variables de entorno del ambiente.
+
+```bash
+vendor/bin/drush status
+```
+> Debe decir `Database: Connected` y `Drupal bootstrap: Successful`.
+
+### 9. Repetir para QA
+Mismos pasos 4 a 8, cambiando:
+
+| Campo | Valor QA |
+|---|---|
+| Environment | `qa` |
+| Name | `drupal-qa` |
+| Branch | `qa` |
+| DB_NAME / DB_USER | `ulatina_qa` |
+| Secretos | los de QA del paso 2 |
+| Site name | `ULatina QA` |
+
+### 10. (Recomendado) Activar aislamiento de despliegues
+En Dokploy: **Settings → Isolated Deployments → activar**.
+> Da a cada proyecto su propia red. Evita que servicios con el mismo nombre
+> en distintos ambientes se vean entre sí.
+
+---
+
+## FASE 4 — Auto-deploy + dominios definitivos (pendiente)

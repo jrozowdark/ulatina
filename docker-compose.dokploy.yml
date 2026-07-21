@@ -1,0 +1,59 @@
+services:
+  drupal:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DRUPAL_HASH_SALT: ${DRUPAL_HASH_SALT}
+    volumes:
+      - drupal_files:/var/www/html/web/sites/default/files
+      - drupal_private:/var/www/html/web/sites/default/private
+    # Sin "ports": Traefik enruta el trafico. Bindear puertos colisiona entre ambientes.
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    networks:
+      - dokploy-network   # visible para Traefik
+      - interna           # comunicacion con la BD
+
+  mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${DB_USER}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Solo red interna: la BD NUNCA queda expuesta ni visible para otros ambientes.
+    networks:
+      - interna
+
+volumes:
+  drupal_files:
+  drupal_private:
+  db_data:
+
+networks:
+  dokploy-network:
+    external: true
+  interna:
+    driver: bridge
