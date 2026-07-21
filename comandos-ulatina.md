@@ -299,4 +299,169 @@ En Dokploy: **Settings → Isolated Deployments → activar**.
 
 ---
 
-## FASE 4 — Auto-deploy + dominios definitivos (pendiente)
+## FASE 4 — Flujo de promoción, producción y entrega
+
+### 4.1 Concepto clave: qué viaja y qué NO viaja entre ambientes
+
+| Elemento | Cómo se mueve | Medio |
+|---|---|---|
+| Código (módulos, temas, composer) | Automático | Git → push → autodeploy |
+| **Configuración** (content types, vistas, campos, permisos) | **Manual: exportar/importar** | `drush cex` → Git → `drush cim` |
+| Contenido (nodos, usuarios, medios) | NO se mueve solo | Copia de BD, solo si se pide |
+| Archivos subidos | NO se mueve solo | Volumen por ambiente |
+
+> ESTO ES LO MÁS IMPORTANTE DEL FLUJO.
+> Si un dev crea un content type en DEV desde la interfaz, ese cambio queda en la
+> BASE DE DATOS de DEV. Hacer merge a `qa` NO lo lleva. Hay que exportarlo a
+> `config/sync` y commitearlo. Sin ese paso, la promoción mueve código vacío.
+
+### 4.2 Ciclo de trabajo del desarrollador (día a día)
+
+Trabajo local, con el compose local:
+```bash
+cd ~/Projects/ulatina && git checkout develop && git pull origin develop
+docker compose up -d
+```
+
+Tras hacer cambios de configuración en la interfaz de Drupal:
+```bash
+docker compose exec drupal vendor/bin/drush cex -y
+```
+> Exporta la configuración de la BD a archivos YAML en `config/sync`.
+> Sin este comando, el cambio no sale nunca del computador del dev.
+
+```bash
+git add config/sync && git commit -m "config: nuevo content type Noticias"
+git push origin develop
+```
+> El push dispara el autodeploy en DEV.
+
+### 4.3 Promoción DEV → QA
+
+```bash
+git checkout qa && git pull origin qa
+git merge develop
+git push origin qa
+```
+> Dispara el autodeploy del ambiente QA.
+
+Después del deploy, aplicar la configuración en QA
+(terminal del contenedor `drupal` de QA en Dokploy):
+```bash
+cd /var/www/html && vendor/bin/drush cim -y && vendor/bin/drush cr
+```
+> `cim` importa los YAML a la BD de QA. `cr` limpia caché.
+> SIN ESTE PASO el sitio QA sigue con la configuración vieja.
+
+Verificar que no quedaron diferencias:
+```bash
+vendor/bin/drush config:status
+```
+> Debe decir que no hay cambios pendientes.
+
+### 4.4 Promoción QA → PRODUCCIÓN
+
+```bash
+git checkout main && git pull origin main
+git merge qa
+git tag -a v1.0.0 -m "Primera entrega a produccion"
+git push origin main --tags
+```
+> El tag permite volver a una versión exacta si algo sale mal.
+
+Secuencia segura en producción (terminal del contenedor):
+```bash
+cd /var/www/html && vendor/bin/drush sql:dump --gzip --result-file=/tmp/backup-pre-deploy.sql
+```
+> SIEMPRE respaldar antes de tocar producción.
+
+```bash
+vendor/bin/drush updatedb -y && vendor/bin/drush cim -y && vendor/bin/drush cr
+```
+> `updatedb` aplica actualizaciones de esquema de módulos, `cim` la configuración.
+> Este es el orden correcto: base de datos primero, configuración después.
+
+### 4.5 Regla de oro de ramas
+
+```
+develop ──merge──> qa ──merge──> main
+  (DEV)            (QA)         (PROD)
+```
+- El código SOLO fluye hacia adelante. Nunca se hace merge de `qa` a `develop`.
+- Si hay un bug urgente en producción: rama desde `main`, arreglo, merge a `main`,
+  y luego ese mismo merge se baja a `qa` y `develop` para no perder el arreglo.
+- Nadie hace push directo a `main`.
+
+### 4.6 Crear el ambiente de PRODUCCIÓN (cuando llegue el dominio real)
+
+Mismos pasos de la Fase 3, cambiando:
+
+| Campo | Valor |
+|---|---|
+| Environment | `production` |
+| Name / App Name | `drupal-prod` / `ulatina-drupal-prod` |
+| Branch | `main` |
+| DB_NAME / DB_USER | `ulatina_prod` |
+| Secretos | generar nuevos, distintos de DEV y QA |
+| Autodeploy | APAGADO (producción se despliega a mano) |
+
+Con dominio real sí se activa HTTPS:
+Domains → Host `www.dominiodelcliente.com` → HTTPS ON → Certificado Let's Encrypt.
+> Requiere que el DNS (registro A) apunte a `82.25.84.215` ANTES de pedir el certificado.
+
+Endurecer `settings.php` para producción (restringir los hosts permitidos):
+```php
+$settings['trusted_host_patterns'] = ['^www\.dominiodelcliente\.com$'];
+```
+> Hoy está en `.*` para permitir los dominios temporales sslip.io.
+
+### 4.7 Respaldos
+
+Base de datos, bajo demanda (terminal del contenedor):
+```bash
+cd /var/www/html && vendor/bin/drush sql:dump --gzip --result-file=/tmp/backup.sql
+```
+
+Automáticos desde Dokploy:
+- Pestaña **Backups**: respaldo programado de la base de datos.
+- Pestaña **Volume Backups**: respaldo del volumen de archivos subidos.
+> Ambos se configuran por ambiente. Producción debe tener los dos activos.
+
+### 4.8 Accesos a entregar a los desarrolladores
+
+| Recurso | Valor |
+|---|---|
+| Repositorio | `github.com/jrozowdark/ulatina` |
+| Rama de trabajo | `develop` |
+| Sitio DEV | `http://ulatina-dev-82-25-84-215.sslip.io` |
+| Sitio QA | `http://ulatina-qa-82-25-84-215.sslip.io` |
+| Panel Dokploy | `http://82.25.84.215:3000` |
+| Usuario admin Drupal | `jrosas` |
+
+Levantar el proyecto en local por primera vez:
+```bash
+git clone git@github.com:jrozowdark/ulatina.git && cd ulatina
+cp .env.example .env
+openssl rand -hex 32
+docker compose up -d --build
+docker compose exec drupal vendor/bin/drush site:install standard -y
+```
+> Cada dev genera su propio `.env` local. Ese archivo nunca se sube al repo.
+
+### 4.9 Errores conocidos y su causa
+
+**MariaDB da "Access denied" para root y para el usuario**
+> El volumen se inicializó con credenciales distintas a las actuales. MariaDB solo
+> crea usuarios en el PRIMER arranque del volumen. Solución: borrar el servicio con
+> sus volúmenes y recrearlo, poniendo las variables ANTES del primer Deploy.
+
+**El sitio responde 500 y el contenedor queda `unhealthy`**
+> Drupal conecta a la BD pero no encuentra tablas. Falta correr `drush site:install`.
+
+**El dominio da 404**
+> Dos causas: el contenedor no está `healthy` (Traefik omite crear la ruta), o falta
+> hacer Deploy después de agregar el dominio. En Compose las labels de Traefik solo
+> se leen en un despliegue nuevo.
+
+**Un cambio de configuración no aparece en QA**
+> Falta `drush cex` en origen, o falta `drush cim` en destino. Ver sección 4.1.
